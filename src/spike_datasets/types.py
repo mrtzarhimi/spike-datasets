@@ -53,7 +53,10 @@ class TrialMeta:
 
 @dataclass(frozen=True)
 class SessionMeta:
-    """Metadata needed to plan views without reading signal values."""
+    """Metadata needed to plan views without reading signal values.
+
+    ``invalid_trial_ids`` preserves original row IDs for malformed trial bounds.
+    """
 
     dataset: Dataset
     session_id: str
@@ -64,6 +67,7 @@ class SessionMeta:
     target_field: str
     target_units: str
     trials: tuple[TrialMeta, ...]
+    invalid_trial_ids: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if self.dataset not in ("chewie", "jango"):
@@ -82,6 +86,18 @@ class SessionMeta:
             raise ValueError("target_field must not be empty")
         if not isinstance(self.trials, tuple):
             raise TypeError("trials must be an ordered tuple of TrialMeta records")
+        if not isinstance(self.invalid_trial_ids, tuple) or any(
+            isinstance(row_id, bool) or not isinstance(row_id, int)
+            for row_id in self.invalid_trial_ids
+        ):
+            raise TypeError("invalid_trial_ids must be a tuple of integer row IDs")
+        if any(row_id < 0 for row_id in self.invalid_trial_ids):
+            raise ValueError("invalid_trial_ids must be nonnegative")
+        invalid_ids = set(self.invalid_trial_ids)
+        if len(invalid_ids) != len(self.invalid_trial_ids):
+            raise ValueError("invalid_trial_ids must be unique")
+        if invalid_ids and any(trial.row_id in invalid_ids for trial in self.trials):
+            raise ValueError("invalid_trial_ids must be distinct from valid trial IDs")
 
 
 @dataclass(frozen=True, order=True)
