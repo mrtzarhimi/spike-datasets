@@ -2,6 +2,7 @@
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from decimal import Decimal, localcontext
 from fractions import Fraction
 
 import numpy as np
@@ -145,7 +146,10 @@ def _fraction_endpoint(value: Fraction, dtype: np.dtype, *, upward: bool) -> np.
     if dtype.itemsize == np.dtype(np.float64).itemsize:
         endpoint = scalar(float(value))
     else:
-        endpoint = scalar(str(value.numerator)) / scalar(str(value.denominator))
+        with localcontext() as context:
+            context.prec = max(80, int(np.finfo(dtype).nmant * 0.31) + 20)
+            decimal_value = Decimal(value.numerator) / Decimal(value.denominator)
+        endpoint = scalar(str(decimal_value))
     direction = scalar(np.inf if upward else -np.inf)
     for _ in range(8):
         represented = Fraction(*endpoint.as_integer_ratio())
