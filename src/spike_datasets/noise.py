@@ -2,6 +2,7 @@
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from fractions import Fraction
 
 import numpy as np
 from numpy.typing import NDArray
@@ -77,30 +78,50 @@ def augment_fit(counts: NDArray, state: NoiseState, *, rng: np.random.Generator)
     wide_type = wide.type
     wide_scales = state.scales.astype(wide)
     wide_factor = wide_type(state.factor)
-    wide_limits = wide_type(3.0) * wide_scales * wide_factor
-    wide_limits = np.nextafter(np.nextafter(wide_limits, wide_type(0)), wide_type(0))
+    wide_limits = _conservative_limits(state.scales, state.factor, wide)
     exact_float64 = _exact_float64_integers(counts)
     rounded_delta = features.astype(wide) - base.astype(wide)
     over_bound = np.abs(rounded_delta) > wide_limits
     needs_wide = ~exact_float64 | over_bound
 
     if np.any(needs_wide):
-        max_count = int(counts.max()) if counts.size else 0
-        wide_integer_limit = 1 << (np.finfo(wide).nmant + 1)
-        if max_count > wide_integer_limit:
-            raise ValueError("counts cannot be represented exactly as floating-point features")
         if np.finfo(wide).nmant > np.finfo(np.float64).nmant:
+            wide_integer_limit = 1 << (np.finfo(wide).nmant + 1)
+            max_count = int(counts.max()) if counts.size else 0
+            if max_count > wide_integer_limit:
+                raise ValueError("counts cannot be represented exactly as floating-point features")
             wide_base = counts.astype(wide)
             wide_candidate = wide_base + draws.astype(wide) * wide_scales * wide_factor
-            wide_delta = wide_candidate - wide_base
-            np.copyto(wide_candidate, wide_base, where=np.abs(wide_delta) > wide_limits)
+            _clamp_to_limit(wide_candidate, wide_base, wide_limits)
             result = features.astype(wide)
             np.copyto(result, wide_candidate, where=needs_wide)
             return result
         if np.any(~exact_float64):
             raise ValueError("counts cannot be represented exactly as floating-point features")
-        np.copyto(features, base, where=over_bound)
+        _clamp_to_limit(features, base, wide_limits.astype(np.float64))
     return features
+
+
+def _conservative_limits(scales: NDArray, factor: float, dtype: np.dtype) -> NDArray:
+    """Round each exact scale cap down only when nearest rounding overshoots it."""
+    scalar = dtype.type
+    factor_value = scalar(factor)
+    limits = np.empty(scales.shape, dtype=dtype)
+    for index, scale in enumerate(scales):
+        exact = 3 * Fraction.from_float(float(scale)) * Fraction.from_float(factor)
+        limit = scalar(3.0) * scalar(float(scale)) * factor_value
+        while Fraction(*limit.as_integer_ratio()) > exact:
+            limit = np.nextafter(limit, scalar(0.0))
+        limits[index] = limit
+    return limits
+
+
+def _clamp_to_limit(features: NDArray, base: NDArray, limits: NDArray) -> None:
+    """Move rounded features inward by one representable step until bounded."""
+    over_bound = np.abs(features - base) > limits
+    while np.any(over_bound):
+        np.copyto(features, np.nextafter(features, base), where=over_bound)
+        over_bound = np.abs(features - base) > limits
 
 
 def _exact_float64_integers(counts: NDArray) -> NDArray[np.bool_]:

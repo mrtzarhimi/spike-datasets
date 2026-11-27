@@ -3,6 +3,7 @@ from fractions import Fraction
 import numpy as np
 import pytest
 
+import spike_datasets.noise as noise_module
 from spike_datasets.noise import augment_fit, fit_noise
 
 
@@ -88,6 +89,17 @@ def test_augment_fit_handles_uint64_maximum_without_scalar_overflow():
     assert int(features[0, 0]) == value
 
 
+def test_float64_only_fallback_allows_exact_large_counts_and_keeps_endpoint(monkeypatch):
+    counts = np.array([[0], [2**54]], dtype=np.int64)
+    state = fit_noise([np.array([[0], [2]], dtype=np.int64)], factor=1 / 32)
+    monkeypatch.setattr(noise_module.np, "longdouble", np.float64)
+
+    features = augment_fit(counts, state, rng=np.random.default_rng(988))
+
+    assert features[0, 0] == 3 / 32
+    assert int(features[1, 0]) == 2**54
+
+
 def test_augment_fit_never_exceeds_the_bound_after_float_rounding():
     counts = np.tile(np.array([[2**52], [2**52 + 10]], dtype=np.int64), (500, 1))
     state = fit_noise([counts])
@@ -103,13 +115,14 @@ def test_augment_fit_never_exceeds_the_bound_after_float_rounding():
 
 
 def test_augment_fit_uses_a_conservative_bound_for_clipped_endpoint_rounding():
-    counts = np.array([[0], [22]], dtype=np.int64)
-    state = fit_noise([counts])
+    counts = np.array([[0], [2]], dtype=np.int64)
+    state = fit_noise([counts], factor=1 / 32)
 
     features = augment_fit(counts, state, rng=np.random.default_rng(988))
 
     delta = Fraction(*features[0, 0].as_integer_ratio()) - int(counts[0, 0])
     exact_bound = 3 * Fraction.from_float(float(state.scales[0])) * Fraction.from_float(state.factor)
+    assert features[0, 0] == 3 / 32
     assert delta <= exact_bound
 
 
