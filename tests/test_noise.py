@@ -49,6 +49,11 @@ def test_augment_fit_preserves_constant_int64_values_beyond_float64_integer_prec
     counts = np.array([[value]], dtype=np.int64)
     state = fit_noise([counts])
 
+    if np.finfo(np.longdouble).nmant <= np.finfo(np.float64).nmant:
+        with pytest.raises(ValueError, match="cannot be represented exactly"):
+            augment_fit(counts, state, rng=np.random.default_rng(42))
+        return
+
     features = augment_fit(counts, state, rng=np.random.default_rng(42))
 
     assert np.issubdtype(features.dtype, np.floating)
@@ -65,6 +70,19 @@ def test_augment_fit_never_exceeds_the_bound_after_float_rounding():
     deltas = np.abs(features.astype(np.longdouble) - counts.astype(np.longdouble))
     bound = np.longdouble(3 * state.factor) * state.scales.astype(np.longdouble)
     assert np.all(deltas <= bound)
+
+
+def test_augment_fit_uses_a_conservative_bound_for_clipped_endpoint_rounding():
+    counts = np.array([[0], [22]], dtype=np.int64)
+    state = fit_noise([counts])
+
+    features = augment_fit(counts, state, rng=np.random.default_rng(988))
+
+    delta = np.longdouble(features[0, 0]) - np.longdouble(counts[0, 0])
+    exact_bound = (
+        np.longdouble(3) * np.longdouble(state.scales[0]) * np.longdouble(state.factor)
+    )
+    assert delta <= exact_bound
 
 
 def test_zero_factor_returns_clean_values_as_float_features():

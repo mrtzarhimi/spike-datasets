@@ -201,7 +201,7 @@ def test_manifest_round_trip_is_canonical_and_persists_metadata_and_spans():
 
 def test_longdouble_timestamp_padding_does_not_change_manifest_identity():
     dtype = np.dtype(np.longdouble)
-    if dtype.itemsize != 16 or np.finfo(dtype).nmant != 63 or sys.byteorder != "little":
+    if dtype.itemsize <= 10 or np.finfo(dtype).nmant != 63 or sys.byteorder != "little":
         pytest.skip("this platform does not store padded x86 extended precision")
     n_samples = 60
     timestamps = np.arange(n_samples, dtype=dtype) * np.longdouble("0.001")

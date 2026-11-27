@@ -290,7 +290,7 @@ def _view_identity(view: ViewPlan) -> str:
 
 def _timestamp_hash(timestamps: np.ndarray, ticks: np.ndarray, dtype: np.dtype) -> str:
     """Hash timestamp values without including x86 long-double padding bytes."""
-    if dtype.kind == "f" and dtype.itemsize == 16 and np.finfo(dtype).nmant == 63:
+    if dtype.kind == "f" and dtype.itemsize > 10 and np.finfo(dtype).nmant == 63:
         digest = sha256()
         for value in timestamps:
             canonical = np.format_float_scientific(value, unique=True, trim="k")
