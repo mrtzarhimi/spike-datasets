@@ -78,28 +78,43 @@ def augment_fit(counts: NDArray, state: NoiseState, *, rng: np.random.Generator)
     wide_scales = state.scales.astype(wide)
     wide_factor = wide_type(state.factor)
     wide_limits = wide_type(3.0) * wide_scales * wide_factor
+    wide_limits = np.nextafter(np.nextafter(wide_limits, wide_type(0)), wide_type(0))
+    exact_float64 = _exact_float64_integers(counts)
     rounded_delta = features.astype(wide) - base.astype(wide)
     over_bound = np.abs(rounded_delta) > wide_limits
+    needs_wide = ~exact_float64 | over_bound
 
-    float64_integer_limit = 1 << (np.finfo(np.float64).nmant + 1)
-    max_count = int(counts.max()) if counts.size else 0
-    needs_wide = counts.size and (max_count > float64_integer_limit or np.any(over_bound))
-    if needs_wide:
+    if np.any(needs_wide):
+        max_count = int(counts.max()) if counts.size else 0
         wide_integer_limit = 1 << (np.finfo(wide).nmant + 1)
         if max_count > wide_integer_limit:
             raise ValueError("counts cannot be represented exactly as floating-point features")
         if np.finfo(wide).nmant > np.finfo(np.float64).nmant:
             wide_base = counts.astype(wide)
-            wide_features = (
-                wide_base + draws.astype(wide) * wide_scales * wide_factor
-            )
-            wide_delta = wide_features - wide_base
-            np.copyto(wide_features, wide_base, where=np.abs(wide_delta) > wide_limits)
-            return wide_features
-        if max_count > float64_integer_limit:
+            wide_candidate = wide_base + draws.astype(wide) * wide_scales * wide_factor
+            wide_delta = wide_candidate - wide_base
+            np.copyto(wide_candidate, wide_base, where=np.abs(wide_delta) > wide_limits)
+            result = features.astype(wide)
+            np.copyto(result, wide_candidate, where=needs_wide)
+            return result
+        if np.any(~exact_float64):
             raise ValueError("counts cannot be represented exactly as floating-point features")
         np.copyto(features, base, where=over_bound)
     return features
+
+
+def _exact_float64_integers(counts: NDArray) -> NDArray[np.bool_]:
+    """Return which nonnegative integer counts survive a float64 round trip."""
+    values = counts.astype(np.uint64, copy=False)
+    exact = values <= (1 << 53)
+    for shift in range(1, 12):
+        lower = 1 << (52 + shift)
+        in_range = values >= lower
+        if shift < 11:
+            upper = 1 << (53 + shift)
+            in_range &= values < upper
+        exact |= in_range & ((values & ((1 << shift) - 1)) == 0)
+    return exact
 
 
 def _validate_counts(counts: NDArray) -> None:

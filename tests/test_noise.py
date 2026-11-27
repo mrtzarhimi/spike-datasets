@@ -1,3 +1,5 @@
+from fractions import Fraction
+
 import numpy as np
 import pytest
 
@@ -61,15 +63,43 @@ def test_augment_fit_preserves_constant_int64_values_beyond_float64_integer_prec
     np.testing.assert_array_equal(state.scales, [0.0])
 
 
+def test_augment_fit_accepts_exact_large_integer_when_wide_precision_is_unavailable():
+    value = 2**54
+    counts = np.array([[value]], dtype=np.int64)
+    state = fit_noise([counts])
+
+    features = augment_fit(counts, state, rng=np.random.default_rng(42))
+
+    assert int(features[0, 0]) == value
+
+
+def test_augment_fit_handles_uint64_maximum_without_scalar_overflow():
+    value = int(np.iinfo(np.uint64).max)
+    counts = np.array([[value]], dtype=np.uint64)
+    state = fit_noise([counts])
+
+    if np.finfo(np.longdouble).nmant <= np.finfo(np.float64).nmant:
+        with pytest.raises(ValueError, match="cannot be represented exactly"):
+            augment_fit(counts, state, rng=np.random.default_rng(42))
+        return
+
+    features = augment_fit(counts, state, rng=np.random.default_rng(42))
+
+    assert int(features[0, 0]) == value
+
+
 def test_augment_fit_never_exceeds_the_bound_after_float_rounding():
     counts = np.tile(np.array([[2**52], [2**52 + 10]], dtype=np.int64), (500, 1))
     state = fit_noise([counts])
 
     features = augment_fit(counts, state, rng=np.random.default_rng(42))
 
-    deltas = np.abs(features.astype(np.longdouble) - counts.astype(np.longdouble))
-    bound = np.longdouble(3 * state.factor) * state.scales.astype(np.longdouble)
-    assert np.all(deltas <= bound)
+    bound = 3 * Fraction.from_float(state.factor) * Fraction.from_float(state.scales[0])
+    deltas = [
+        abs(Fraction(*feature.as_integer_ratio()) - int(count))
+        for feature, count in zip(features[:, 0], counts[:, 0])
+    ]
+    assert all(delta <= bound for delta in deltas)
 
 
 def test_augment_fit_uses_a_conservative_bound_for_clipped_endpoint_rounding():
@@ -78,11 +108,29 @@ def test_augment_fit_uses_a_conservative_bound_for_clipped_endpoint_rounding():
 
     features = augment_fit(counts, state, rng=np.random.default_rng(988))
 
-    delta = np.longdouble(features[0, 0]) - np.longdouble(counts[0, 0])
-    exact_bound = (
-        np.longdouble(3) * np.longdouble(state.scales[0]) * np.longdouble(state.factor)
-    )
+    delta = Fraction(*features[0, 0].as_integer_ratio()) - int(counts[0, 0])
+    exact_bound = 3 * Fraction.from_float(float(state.scales[0])) * Fraction.from_float(state.factor)
     assert delta <= exact_bound
+
+
+def test_augment_fit_keeps_small_values_stable_when_large_values_need_wide_precision():
+    state = fit_noise([np.array([[0], [2]], dtype=np.int64)])
+    rng_seed = 12
+
+    alone = augment_fit(np.array([[0]], dtype=np.int64), state, rng=np.random.default_rng(rng_seed))
+    if np.finfo(np.longdouble).nmant <= np.finfo(np.float64).nmant:
+        with pytest.raises(ValueError, match="cannot be represented exactly"):
+            augment_fit(
+                np.array([[0], [2**53 + 1]], dtype=np.int64),
+                state,
+                rng=np.random.default_rng(rng_seed),
+            )
+        return
+    batched = augment_fit(
+        np.array([[0], [2**53 + 1]], dtype=np.int64), state, rng=np.random.default_rng(rng_seed)
+    )
+
+    assert alone[0, 0] == batched[0, 0]
 
 
 def test_zero_factor_returns_clean_values_as_float_features():
