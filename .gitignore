@@ -1,0 +1,33 @@
+# Python build and test artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Local recordings, archives, model files, and experiment outputs
+*.mat
+*.h5
+*.hdf5
+*.nwb
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.pt
+*.pth
+*.ckpt
+*.pkl
+*.pickle
+/data/
+/datasets/
+/outputs/
+/results/
+/checkpoints/
+.env
+*.local
