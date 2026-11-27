@@ -1,6 +1,7 @@
 from collections import Counter
 from dataclasses import replace
 import json
+import sys
 
 import numpy as np
 import pytest
@@ -196,6 +197,48 @@ def test_manifest_round_trip_is_canonical_and_persists_metadata_and_spans():
     assert reopened.to_json() == text
     assert reopened.manifest_id == manifest.manifest_id
     assert plan_splits(view, seed=18).manifest_id != manifest.manifest_id
+
+
+def test_longdouble_timestamp_padding_does_not_change_manifest_identity():
+    dtype = np.dtype(np.longdouble)
+    if dtype.itemsize != 16 or np.finfo(dtype).nmant != 63 or sys.byteorder != "little":
+        pytest.skip("this platform does not store padded x86 extended precision")
+    n_samples = 60
+    timestamps = np.arange(n_samples, dtype=dtype) * np.longdouble("0.001")
+    raw = timestamps.view(np.uint8).reshape(n_samples, dtype.itemsize)
+    first_bytes = raw.copy()
+    second_bytes = raw.copy()
+    first_bytes[:, 10:] = 0
+    second_bytes[:, 10:] = 0xA5
+    first_timestamps = first_bytes.view(dtype).reshape(-1)
+    second_timestamps = second_bytes.view(dtype).reshape(-1)
+    np.testing.assert_array_equal(first_timestamps, second_timestamps)
+
+    trials = tuple(
+        TrialMeta(row, start * 0.001, stop * 0.001)
+        for row, start, stop in ((0, 0, 10), (1, 20, 30), (2, 40, 60))
+    )
+    meta = SessionMeta(
+        dataset="chewie",
+        session_id="longdouble-fixture",
+        revision="fixture",
+        native_bin_width_s=0.001,
+        native_timestamps=first_timestamps,
+        unit_ids=("u1",),
+        target_field="curs_v",
+        target_units="cm/s",
+        trials=trials,
+    )
+    first_view = plan_view(meta, mode="trial", bin_width_s=0.004)
+    second_view = plan_view(
+        replace(meta, native_timestamps=second_timestamps), mode="trial", bin_width_s=0.004
+    )
+
+    first_manifest = plan_splits(first_view)
+    second_manifest = plan_splits(second_view)
+
+    assert second_manifest.to_json() == first_manifest.to_json()
+    assert load_manifest(first_manifest.to_json(), second_view) == first_manifest
 
 
 @pytest.mark.parametrize("changed", ["mode", "width", "session", "revision", "bins", "timestamps"])

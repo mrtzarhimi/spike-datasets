@@ -44,6 +44,29 @@ def test_fit_noise_resolves_small_variation_at_large_integer_offsets():
     np.testing.assert_array_equal(fit_noise(fit).scales, [1.0, 0.0])
 
 
+def test_augment_fit_preserves_constant_int64_values_beyond_float64_integer_precision():
+    value = 2**53 + 1
+    counts = np.array([[value]], dtype=np.int64)
+    state = fit_noise([counts])
+
+    features = augment_fit(counts, state, rng=np.random.default_rng(42))
+
+    assert np.issubdtype(features.dtype, np.floating)
+    assert int(features[0, 0]) == value
+    np.testing.assert_array_equal(state.scales, [0.0])
+
+
+def test_augment_fit_never_exceeds_the_bound_after_float_rounding():
+    counts = np.tile(np.array([[2**52], [2**52 + 10]], dtype=np.int64), (500, 1))
+    state = fit_noise([counts])
+
+    features = augment_fit(counts, state, rng=np.random.default_rng(42))
+
+    deltas = np.abs(features.astype(np.longdouble) - counts.astype(np.longdouble))
+    bound = np.longdouble(3 * state.factor) * state.scales.astype(np.longdouble)
+    assert np.all(deltas <= bound)
+
+
 def test_zero_factor_returns_clean_values_as_float_features():
     counts = np.array([[0, 4], [2, 4]], dtype=np.uint16)
     state = fit_noise([counts], factor=0.0)

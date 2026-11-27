@@ -229,6 +229,7 @@ def _view_identity(view: ViewPlan) -> str:
         raise ValueError("native timestamps must be in strict chronological order")
     timestamp_dtype = timestamps.dtype.newbyteorder("<")
     ticks = np.ascontiguousarray(timestamps, dtype=timestamp_dtype)
+    timestamp_hash = _timestamp_hash(timestamps, ticks, timestamp_dtype)
 
     ids = view.group_ids
     if any(type(group_id) is not int or group_id < 0 for group_id in ids):
@@ -274,7 +275,7 @@ def _view_identity(view: ViewPlan) -> str:
             "native_bin_width_s": float(meta.native_bin_width_s),
             "n_native_samples": len(timestamps),
             "timestamp_dtype": timestamp_dtype.str,
-            "timestamps_sha256": sha256(ticks).hexdigest(),
+            "timestamps_sha256": timestamp_hash,
             "unit_ids": meta.unit_ids,
             "target_field": meta.target_field,
             "target_units": meta.target_units,
@@ -285,6 +286,18 @@ def _view_identity(view: ViewPlan) -> str:
         "excluded_trial_ids": view.excluded_trial_ids,
         "dropped_spans": [asdict(span) for span in view.dropped_spans],
     })
+
+
+def _timestamp_hash(timestamps: np.ndarray, ticks: np.ndarray, dtype: np.dtype) -> str:
+    """Hash timestamp values without including x86 long-double padding bytes."""
+    if dtype.kind == "f" and dtype.itemsize == 16 and np.finfo(dtype).nmant == 63:
+        digest = sha256()
+        for value in timestamps:
+            canonical = np.format_float_scientific(value, unique=True, trim="k")
+            digest.update(canonical.encode("ascii"))
+            digest.update(b"\0")
+        return digest.hexdigest()
+    return sha256(ticks).hexdigest()
 
 
 def _canonical_json(value: object) -> str:
