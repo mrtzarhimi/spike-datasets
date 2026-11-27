@@ -76,8 +76,6 @@ experiment outputs. Install the wheel into a fresh environment and import it
 while the working directory is outside the checkout to ensure the import comes
 from the installed wheel.
 
-Before publication, the maintainer must also approve a code license and confirm
-that any reused code has compatible provenance and required upstream notices.
-No license has been selected or included by this repository. That decision is a
-publication blocker; do not add a license file or publish until the maintainer
-supplies or approves the license text.
+Confirm that both distributions include the [MIT License](LICENSE) and declare
+`MIT` in the package metadata. For any reused code, confirm license compatibility
+and retain the required upstream notices.

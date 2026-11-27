@@ -49,3 +49,9 @@ PYTHONPATH=src .venv/bin/python examples/cross_day.py --synthetic
 ```
 
 Or pass local files with `--source PATH` for within-session work and `--day0 PATH --dayk PATH` for a pair. Both scripts accept `--view trial|fixed` and `--strategy kfold|chrono`. They use a small clean-target demonstration metric; replace that scorer and the caller-owned model fitting with the evaluation appropriate to your study. No real data is downloaded or included.
+
+## License
+
+The package code is available under the [MIT License](LICENSE). The
+[Dryad dataset record](https://doi.org/10.5061/dryad.cvdncjt7n) provides the
+Chewie and Jango recordings and their terms of use.
