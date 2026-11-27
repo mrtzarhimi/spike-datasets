@@ -130,6 +130,33 @@ def test_float64_only_fallback_detects_hidden_integer_overshoot(monkeypatch):
     assert abs(delta) <= exact_limit
 
 
+def test_float64_only_fallback_handles_the_smallest_valid_noise_factor(monkeypatch):
+    factor = float.fromhex("0x0.0000000000001p-1022")
+    state = fit_noise([np.array([[0], [1]], dtype=np.int64)], factor=factor)
+    monkeypatch.setattr(noise_module.np, "longdouble", np.float64)
+
+    feature = augment_fit(
+        np.array([[0]], dtype=np.int64), state, rng=np.random.default_rng(988)
+    )[0, 0]
+
+    exact_limit = 3 * Fraction.from_float(float(state.scales[0])) * Fraction.from_float(factor)
+    assert feature > 0
+    assert Fraction(*feature.as_integer_ratio()) <= exact_limit
+
+
+def test_wide_precision_endpoint_handles_the_smallest_valid_noise_factor():
+    factor = float.fromhex("0x0.0000000000001p-1022")
+    state = fit_noise([np.array([[0], [1]], dtype=np.int64)], factor=factor)
+
+    feature = augment_fit(
+        np.array([[0]], dtype=np.int64), state, rng=np.random.default_rng(988)
+    )[0, 0]
+
+    exact_limit = 3 * Fraction.from_float(float(state.scales[0])) * Fraction.from_float(factor)
+    assert feature > 0
+    assert Fraction(*feature.as_integer_ratio()) <= exact_limit
+
+
 def test_augment_fit_never_exceeds_the_bound_after_float_rounding():
     counts = np.tile(np.array([[2**52], [2**52 + 10]], dtype=np.int64), (500, 1))
     state = fit_noise([counts])

@@ -142,7 +142,10 @@ def _over_bound_mask(
 def _fraction_endpoint(value: Fraction, dtype: np.dtype, *, upward: bool) -> np.floating:
     """Round a rational endpoint inward to a representable value in ``dtype``."""
     scalar = dtype.type
-    endpoint = scalar(value.numerator) / scalar(value.denominator)
+    if dtype.itemsize == np.dtype(np.float64).itemsize:
+        endpoint = scalar(float(value))
+    else:
+        endpoint = scalar(str(value.numerator)) / scalar(str(value.denominator))
     direction = scalar(np.inf if upward else -np.inf)
     for _ in range(8):
         represented = Fraction(*endpoint.as_integer_ratio())
