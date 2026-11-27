@@ -65,6 +65,11 @@ def test_selection_is_bound_to_source_manifest_and_fold(tmp_path):
     changed_source = replace(source, session_id="Chewie_20160929_01")
     with pytest.raises(ValueError, match="source"):
         open_experiment(changed_source, view, manifest, 0)
+    changed_view = replace(view, meta=replace(view.meta, session_id=changed_source.session_id))
+    changed_manifest = plan_splits(changed_view, strategy="kfold")
+    changed_experiment = open_experiment(changed_source, changed_view, changed_manifest, 0)
+    with pytest.raises(ValueError, match="source"):
+        changed_experiment.refit_data(selection, noise_seed=1)
     other_manifest = plan_splits(view, strategy="chrono", seed=12)
     with pytest.raises(ValueError, match="manifest"):
         open_experiment(source, view, other_manifest, 0).refit_data(selection, noise_seed=1)
@@ -113,7 +118,26 @@ def test_poisoning_outer_holdout_cannot_change_development_or_refit(tmp_path):
 
 @pytest.mark.parametrize("mode", ["trial", "fixed"])
 @pytest.mark.parametrize("strategy", ["kfold", "chrono"])
-def test_all_view_and_split_combinations_open(mode, strategy, tmp_path):
+def test_all_view_and_split_combinations_respect_role_reads(mode, strategy, tmp_path, monkeypatch):
     source, view, manifest = build(tmp_path, mode=mode, strategy=strategy)
+    calls = []
+    def spy(read_source, span, *, with_behavior):
+        calls.append((span, with_behavior))
+        return real_read_span(read_source, span, with_behavior=with_behavior)
+    monkeypatch.setattr("spike_datasets.evaluation.read_span", spy)
     experiment = open_experiment(source, view, manifest, 0)
     assert experiment.outer_fold.index == 0
+    experiment.inner_data(0, noise_seed=13)
+    held_groups = [group for group in view.groups
+                   if group.group_id in experiment.outer_fold.held_out_group_ids]
+    def touches_held(span):
+        return any(span.start < group.owned_span.stop and group.owned_span.start < span.stop
+                   for group in held_groups)
+    assert calls and not any(touches_held(span) for span, _ in calls)
+    selection = experiment.lock_selection({"noise_factor": 0.0})
+    experiment.refit_data(selection, noise_seed=14)
+    assert not any(touches_held(span) for span, _ in calls)
+    calls.clear()
+    score = experiment.score(selection, lambda data: data)
+    assert score.n_samples > 0
+    assert calls and all(touches_held(span) for span, _ in calls)

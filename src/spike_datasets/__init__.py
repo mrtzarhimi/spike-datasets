@@ -2,6 +2,7 @@
 
 from .types import BinnedBlock, Dataset, RawSpan, SessionMeta, Source, TrialMeta
 from .evaluation import CleanData, Experiment, FitAndValidation, FitData, FrozenSelection, Score, open_experiment
+from .pairs import FixedPair, pair_experiments
 
 __all__ = [
     "BinnedBlock",
@@ -9,6 +10,7 @@ __all__ = [
     "Experiment",
     "FitAndValidation",
     "FitData",
+    "FixedPair",
     "FrozenSelection",
     "Dataset",
     "RawSpan",
@@ -16,5 +18,6 @@ __all__ = [
     "Score",
     "Source",
     "open_experiment",
+    "pair_experiments",
     "TrialMeta",
 ]
