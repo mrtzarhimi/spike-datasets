@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "spike-datasets"
 version = "0.1.0"
 description = "Shared, split-safe data access for Chewie and Jango spike recordings"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",
