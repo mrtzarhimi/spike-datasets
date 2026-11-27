@@ -78,10 +78,9 @@ def augment_fit(counts: NDArray, state: NoiseState, *, rng: np.random.Generator)
     wide_type = wide.type
     wide_scales = state.scales.astype(wide)
     wide_factor = wide_type(state.factor)
-    wide_limits = _conservative_limits(state.scales, state.factor, wide)
+    float_limits, exact_limits = _noise_limits(state.scales, state.factor, np.dtype(np.float64))
     exact_float64 = _exact_float64_integers(counts)
-    rounded_delta = features.astype(wide) - base.astype(wide)
-    over_bound = np.abs(rounded_delta) > wide_limits
+    over_bound = _over_bound_mask(features, counts, float_limits, exact_limits)
     needs_wide = ~exact_float64 | over_bound
 
     if np.any(needs_wide):
@@ -92,36 +91,86 @@ def augment_fit(counts: NDArray, state: NoiseState, *, rng: np.random.Generator)
                 raise ValueError("counts cannot be represented exactly as floating-point features")
             wide_base = counts.astype(wide)
             wide_candidate = wide_base + draws.astype(wide) * wide_scales * wide_factor
-            _clamp_to_limit(wide_candidate, wide_base, wide_limits)
+            wide_limits, wide_exact_limits = _noise_limits(state.scales, state.factor, wide)
+            _clamp_to_limit(wide_candidate, counts, wide_limits, wide_exact_limits)
             result = features.astype(wide)
             np.copyto(result, wide_candidate, where=needs_wide)
             return result
         if np.any(~exact_float64):
             raise ValueError("counts cannot be represented exactly as floating-point features")
-        _clamp_to_limit(features, base, wide_limits.astype(np.float64))
+        _clamp_to_limit(features, counts, float_limits, exact_limits)
     return features
 
 
-def _conservative_limits(scales: NDArray, factor: float, dtype: np.dtype) -> NDArray:
-    """Round each exact scale cap down only when nearest rounding overshoots it."""
+def _noise_limits(
+    scales: NDArray, factor: float, dtype: np.dtype
+) -> tuple[NDArray, tuple[Fraction, ...]]:
+    """Return approximate and exact amplitude caps for each unit."""
     scalar = dtype.type
     factor_value = scalar(factor)
     limits = np.empty(scales.shape, dtype=dtype)
+    exact_limits = []
     for index, scale in enumerate(scales):
         exact = 3 * Fraction.from_float(float(scale)) * Fraction.from_float(factor)
-        limit = scalar(3.0) * scalar(float(scale)) * factor_value
-        while Fraction(*limit.as_integer_ratio()) > exact:
-            limit = np.nextafter(limit, scalar(0.0))
-        limits[index] = limit
-    return limits
+        limits[index] = scalar(3.0) * scalar(float(scale)) * factor_value
+        exact_limits.append(exact)
+    return limits, tuple(exact_limits)
 
 
-def _clamp_to_limit(features: NDArray, base: NDArray, limits: NDArray) -> None:
-    """Move rounded features inward by one representable step until bounded."""
-    over_bound = np.abs(features - base) > limits
-    while np.any(over_bound):
-        np.copyto(features, np.nextafter(features, base), where=over_bound)
-        over_bound = np.abs(features - base) > limits
+def _over_bound_mask(
+    features: NDArray,
+    counts: NDArray,
+    limits: NDArray,
+    exact_limits: tuple[Fraction, ...],
+) -> NDArray[np.bool_]:
+    """Check rounded deltas, resolving near-boundary cases with exact values."""
+    base = counts.astype(features.dtype)
+    magnitude = np.abs(features - base)
+    margin = np.abs(np.spacing(magnitude)) + np.abs(np.spacing(limits))
+    obvious = magnitude > limits + margin
+    near = np.abs(magnitude - limits) <= margin
+    over_bound = obvious.copy()
+    for unit, exact_limit in enumerate(exact_limits):
+        if exact_limit == 0:
+            near[:, unit] = False
+    for row, unit in np.argwhere(near):
+        delta = Fraction(*features[row, unit].as_integer_ratio()) - int(counts[row, unit])
+        over_bound[row, unit] = abs(delta) > exact_limits[unit]
+    return over_bound
+
+
+def _fraction_endpoint(value: Fraction, dtype: np.dtype, *, upward: bool) -> np.floating:
+    """Round a rational endpoint inward to a representable value in ``dtype``."""
+    scalar = dtype.type
+    endpoint = scalar(value.numerator) / scalar(value.denominator)
+    direction = scalar(np.inf if upward else -np.inf)
+    for _ in range(8):
+        represented = Fraction(*endpoint.as_integer_ratio())
+        inside = represented >= value if upward else represented <= value
+        if inside:
+            return endpoint
+        endpoint = np.nextafter(endpoint, direction)
+    raise ArithmeticError("could not round augmentation endpoint inward")
+
+
+def _clamp_to_limit(
+    features: NDArray,
+    counts: NDArray,
+    limits: NDArray,
+    exact_limits: tuple[Fraction, ...],
+) -> None:
+    """Clamp only out-of-bound entries to directed, representable endpoints."""
+    over_bound = _over_bound_mask(features, counts, limits, exact_limits)
+    dtype = np.dtype(features.dtype)
+    for row, unit in np.argwhere(over_bound):
+        base = Fraction(int(counts[row, unit]))
+        exact_limit = exact_limits[unit]
+        lower = _fraction_endpoint(base - exact_limit, dtype, upward=True)
+        upper = _fraction_endpoint(base + exact_limit, dtype, upward=False)
+        if features[row, unit] < lower:
+            features[row, unit] = lower
+        elif features[row, unit] > upper:
+            features[row, unit] = upper
 
 
 def _exact_float64_integers(counts: NDArray) -> NDArray[np.bool_]:

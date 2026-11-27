@@ -100,6 +100,36 @@ def test_float64_only_fallback_allows_exact_large_counts_and_keeps_endpoint(monk
     assert int(features[1, 0]) == 2**54
 
 
+@pytest.mark.parametrize(
+    ("fit_values", "factor"),
+    [((1, 21), 1 / 30), ((1, 40013), 1 / 60018)],
+)
+def test_augment_fit_clamps_near_integer_endpoints_without_losing_the_value(
+    fit_values, factor
+):
+    fit = np.array(fit_values, dtype=np.int64).reshape(-1, 1)
+    state = fit_noise([fit], factor=factor)
+
+    features = augment_fit(np.array([[1]], dtype=np.int64), state, rng=np.random.default_rng(755))
+
+    exact_limit = 3 * Fraction.from_float(float(state.scales[0])) * Fraction.from_float(factor)
+    delta = Fraction(*features[0, 0].as_integer_ratio()) - 1
+    assert features[0, 0] > 0
+    assert abs(delta) <= exact_limit
+
+
+def test_float64_only_fallback_detects_hidden_integer_overshoot(monkeypatch):
+    fit = np.array([[1], [1 + 2**62]], dtype=np.int64)
+    state = fit_noise([fit], factor=1 / 32)
+    monkeypatch.setattr(noise_module.np, "longdouble", np.float64)
+
+    feature = augment_fit(np.array([[1]], dtype=np.int64), state, rng=np.random.default_rng(755))[0, 0]
+
+    exact_limit = 3 * Fraction.from_float(float(state.scales[0])) * Fraction.from_float(state.factor)
+    delta = Fraction(*feature.as_integer_ratio()) - 1
+    assert abs(delta) <= exact_limit
+
+
 def test_augment_fit_never_exceeds_the_bound_after_float_rounding():
     counts = np.tile(np.array([[2**52], [2**52 + 10]], dtype=np.int64), (500, 1))
     state = fit_noise([counts])
