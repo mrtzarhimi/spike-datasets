@@ -149,48 +149,76 @@ def plan_view(
     return ViewPlan(meta, mode, bin_width_s, tuple(groups), excluded, dropped)
 
 
-def _bin_samples(meta: SessionMeta, bin_width_s: float) -> int:
-    timestamps = meta.native_timestamps
+def _validated_native_width(timestamps: NDArray, stored_width: float) -> float:
+    """Find a single cadence consistent with all stored timestamps and the width scalar."""
     if not len(timestamps) or timestamps.dtype.kind not in "iuf":
         raise ValueError("native timebase must contain real numeric timestamps")
     if not np.isfinite(timestamps).all():
         raise ValueError("native timebase must contain finite timestamps")
+    if len(timestamps) == 1:
+        return float(stored_width)
+
     numeric_dtype = np.result_type(timestamps.dtype, np.float64)
     values = timestamps.astype(numeric_dtype, copy=False)
-    native_width = meta.native_bin_width_s
-    tolerance = native_width * 1e-6
+    width = float(stored_width)
+    tolerance = width * 1e-6
     step_tolerance = grid_tolerance = tolerance
-    if timestamps.dtype.kind == "f" and len(values) > 1:
-        # Each stored endpoint can differ from its true time by half a representable step.
+    if timestamps.dtype.kind == "f":
         with np.errstate(over="ignore"):
             spacing = np.spacing(np.abs(timestamps)).astype(numeric_dtype, copy=False)
-        if spacing.max() + tolerance >= native_width / 2:
+        if spacing.max() + tolerance >= width / 2:
             raise ValueError("native timestamp precision is too coarse to validate a uniform timebase")
         endpoint_error = spacing * 0.5
         step_tolerance = tolerance + endpoint_error[:-1] + endpoint_error[1:]
         grid_tolerance = tolerance + endpoint_error[0] + endpoint_error[1:]
 
     steps = np.diff(values)
-    elapsed = values[1:] - values[0]
-    nominal = np.arange(1, len(values), dtype=numeric_dtype) * native_width
-    if (
-        np.any(steps <= 0)
-        or not np.all(np.abs(steps - native_width) <= step_tolerance)
-        or not np.all(np.abs(elapsed - nominal) <= grid_tolerance)
-    ):
-        raise ValueError("native timebase must be uniform and match the native bin width")
+    if np.all(steps > 0):
+        elapsed = values[1:] - values[0]
+        ticks = np.arange(1, len(values), dtype=numeric_dtype)
+        # Each adjacent pair and each tick relative to the origin bounds the same cadence.
+        lower = max(np.max(steps - step_tolerance), np.max((elapsed - grid_tolerance) / ticks))
+        upper = min(np.min(steps + step_tolerance), np.min((elapsed + grid_tolerance) / ticks))
+        scalar_dtype = np.asarray(stored_width).dtype
+        if scalar_dtype.kind == "f" and scalar_dtype.itemsize <= timestamps.dtype.itemsize:
+            measured = float(elapsed[-1] / len(steps))
+            if lower <= measured <= upper and scalar_dtype.type(measured) == stored_width:
+                return measured
+        if lower <= width <= upper:
+            return width
+        if lower <= upper and scalar_dtype.kind == "f":
+            # A source scalar represents every cadence that rounds to its stored value.
+            candidate = lower + (upper - lower) * 0.5
+            with np.errstate(over="ignore"):
+                if scalar_dtype.type(candidate) == stored_width:
+                    return float(candidate)
 
+    raise ValueError("native timebase must be uniform and match the native bin width")
+
+
+def _half_spacing(value: float) -> float:
+    if np.asarray(value).dtype.kind != "f":
+        return 0.0
+    with np.errstate(over="ignore"):
+        return float(np.spacing(value)) * 0.5
+
+
+def _bin_samples(meta: SessionMeta, bin_width_s: float) -> int:
+    native_width = _validated_native_width(meta.native_timestamps, meta.native_bin_width_s)
     if (
         isinstance(bin_width_s, (bool, np.bool_))
         or not math.isfinite(bin_width_s)
         or bin_width_s <= 0
     ):
         raise ValueError("bin width must be positive and finite")
-    ratio = float(bin_width_s) / float(meta.native_bin_width_s)
+    ratio = float(bin_width_s) / float(native_width)
     if not math.isfinite(ratio):
         raise ValueError("bin width must be a finite number of native samples")
     width = round(ratio)
-    if width < 1 or not math.isclose(ratio, width, rel_tol=0.0, abs_tol=1e-6):
+    # The native width is a Python float cadence within the source grid's
+    # representable interval. Only the requested duration may still carry input rounding.
+    tolerance = max(1e-6, _half_spacing(bin_width_s) / float(native_width))
+    if width < 1 or tolerance >= 0.5 or abs(ratio - width) > tolerance:
         raise ValueError("bin width must be a whole number of native samples")
     return width
 

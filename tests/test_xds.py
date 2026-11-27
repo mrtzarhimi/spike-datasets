@@ -1,7 +1,10 @@
+from functools import partial
+
 import h5py
 import numpy as np
 import pytest
 
+from spike_datasets.binning import materialize, plan_view
 from spike_datasets.types import RawSpan, Source
 from spike_datasets.xds import discover_sessions, inspect_session, read_span
 from tests.fixtures.xds import write_xds
@@ -192,6 +195,48 @@ def test_inspects_regular_float32_timestamps(tmp_path, start):
     assert meta.native_bin_width_s == 0.001
     assert meta.native_timestamps.dtype == np.float32
     np.testing.assert_array_equal(meta.native_timestamps, timestamps)
+
+
+def test_inspects_64_ticks_with_float32_timestamps_and_width(tmp_path):
+    timestamps = (np.arange(64) * 0.001).astype(np.float32)
+    path = write_xds(
+        tmp_path / "Chewie_20160928_001.mat", timestamps=timestamps, bin_width=np.float32(0.001)
+    )
+    meta = inspect_session(Source(path, "chewie", path.stem, "synthetic"))
+
+    np.testing.assert_array_equal(meta.native_timestamps, timestamps)
+    assert np.float32(meta.native_bin_width_s) == np.float32(0.001)
+    assert type(meta.native_bin_width_s) is float
+
+
+@pytest.mark.parametrize(
+    "mode,width,spans",
+    [
+        ("trial", 0.02, (((2, 22), (22, 42)), ((52, 72), (72, 92), (92, 112)))),
+        ("fixed", 0.02, (((0, 20), (20, 40)), ((60, 80), (80, 100), (100, 120)))),
+        ("trial", 0.04, (((2, 42),), ((52, 92),))),
+        ("fixed", 0.04, (((0, 40),), ((80, 120),))),
+    ],
+)
+def test_materializes_float32_xds_grid_with_exact_group_spans(tmp_path, mode, width, spans):
+    timestamps = (np.arange(120) * 0.001).astype(np.float32)
+    path = write_xds(
+        tmp_path / "Chewie_20160928_001.mat", timestamps=timestamps, bin_width=np.float32(0.001)
+    )
+    with h5py.File(path, "r+") as file:
+        file["xds/trial_start_time"][0] = [0.0015, np.nan, 0.0515]
+        file["xds/trial_end_time"][0] = [0.0445, np.nan, 0.1195]
+    source = Source(path, "chewie", path.stem, "synthetic")
+
+    view = plan_view(inspect_session(source), mode=mode, bin_width_s=width)
+    data = materialize(view, [0, 1], partial(read_span, source), with_behavior=True)
+
+    assert data.group_ids == (0, 1)
+    assert tuple(block.group_id for block in data.blocks) == (0, 1)
+    assert tuple(block.trial_id for block in data.blocks) == ((0, 2) if mode == "trial" else (None, None))
+    for block, bounds in zip(data.blocks, spans):
+        assert block.spans == tuple(RawSpan(start, stop) for start, stop in bounds)
+        np.testing.assert_array_equal(block.counts[:, 0], [sum(range(a, b)) for a, b in bounds])
 
 
 @pytest.mark.parametrize(

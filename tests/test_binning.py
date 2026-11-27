@@ -110,6 +110,48 @@ def test_invalid_bin_width_is_rejected(width):
         plan_view(session(10, [(0, 0, 10)]), mode="trial", bin_width_s=width)
 
 
+@pytest.mark.parametrize(
+    "ticks,native_width,timestamp_dtype,requested_width",
+    [
+        (40, np.float32(0.001), np.float32, 0.04),
+        (100, 0.001, np.float64, np.float32(0.1)),
+    ],
+)
+def test_whole_bin_uses_native_and_requested_width_precision(
+    ticks, native_width, timestamp_dtype, requested_width
+):
+    timestamps = (np.arange(ticks) * float(native_width)).astype(timestamp_dtype)
+    meta = replace(
+        session(ticks, [(0, 0, ticks)], timestamps=timestamps), native_bin_width_s=native_width
+    )
+
+    view = plan_view(meta, mode="fixed", bin_width_s=requested_width)
+
+    assert view.groups[0].blocks[0].spans == (RawSpan(0, ticks),)
+
+
+@pytest.mark.parametrize("width", [0.0400001, np.float32(0.10025)])
+def test_fractional_widths_stay_invalid_on_a_float32_grid(width):
+    native_width = np.float32(0.001)
+    timestamps = (np.arange(40) * float(native_width)).astype(np.float32)
+    meta = replace(
+        session(40, [(0, 0, 40)], timestamps=timestamps), native_bin_width_s=native_width
+    )
+    with pytest.raises(ValueError, match="whole number"):
+        plan_view(meta, mode="trial", bin_width_s=width)
+
+
+def test_fractional_width_outside_validated_cadence_is_rejected():
+    native_width = np.float32(0.001)
+    timestamps = (np.arange(120) * float(native_width)).astype(np.float32)
+    meta = replace(
+        session(120, [(0, 0, 120)], timestamps=timestamps), native_bin_width_s=native_width
+    )
+
+    with pytest.raises(ValueError, match="whole number"):
+        plan_view(meta, mode="fixed", bin_width_s=0.040000004)
+
+
 def test_nonuniform_timebase_is_rejected():
     meta = session(4, [(0, 0, 4)], timestamps=np.array([0, 0.001, 0.0025, 0.003]))
     with pytest.raises(ValueError, match="uniform"):

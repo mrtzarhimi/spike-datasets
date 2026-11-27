@@ -10,6 +10,7 @@ import h5py
 import numpy as np
 from numpy.typing import NDArray
 
+from .binning import _validated_native_width
 from .types import Dataset, RawSpan, SessionMeta, Source, TrialMeta
 
 
@@ -147,51 +148,14 @@ def _native_width(
     field = _field(xds, source, "bin_width")
     if field.size != 1 or field.dtype.kind not in "iuf":
         raise _error(source, field.name, "must be a numeric scalar")
-    width = float(field[...].item())
+    # Preserve the HDF5 scalar precision for cadence and whole-bin validation.
+    width = field[...].reshape(-1)[0]
     if not np.isfinite(width) or width <= 0:
         raise _error(source, field.name, "must be finite and positive")
-    if not np.isfinite(timestamps).all():
-        raise _error(source, "time_frame", "must contain finite timestamps")
-
-    numeric_dtype = np.result_type(timestamps.dtype, np.float64)
-    values = timestamps.astype(numeric_dtype, copy=False)
-    elapsed = values[1:] - values[0]
-    candidates = [width]
-    if (
-        elapsed.size
-        and field.dtype.kind == timestamps.dtype.kind == "f"
-        and field.dtype.itemsize < timestamps.dtype.itemsize
-    ):
-        # A coarse scalar can round away part of the cadence recorded in the timestamps.
-        measured_width = float(elapsed[-1] / elapsed.size)
-        with np.errstate(over="ignore"):
-            rounded_width = np.asarray(measured_width, dtype=field.dtype).item()
-        if rounded_width == width and measured_width != width:
-            candidates.insert(0, measured_width)
-
-    step_error = grid_error = 0.0
-    if timestamps.dtype.kind == "f" and len(values) > 1:
-        # Each stored endpoint can round by half a step in its original dtype.
-        with np.errstate(over="ignore"):
-            spacing = np.spacing(np.abs(timestamps)).astype(numeric_dtype, copy=False)
-        max_spacing = spacing.max()
-        candidates = [w for w in candidates if max_spacing + w * 1e-6 < w / 2]
-        if not candidates:
-            raise _error(source, "time_frame", "has insufficient precision to validate bin_width")
-        endpoint_error = spacing * 0.5
-        step_error = endpoint_error[:-1] + endpoint_error[1:]
-        grid_error = endpoint_error[0] + endpoint_error[1:]
-
-    steps = np.diff(values)
-    if np.all(steps > 0):
-        ticks = np.arange(1, len(values), dtype=numeric_dtype)
-        for candidate in candidates:
-            tolerance = candidate * 1e-6
-            if np.all(np.abs(steps - candidate) <= tolerance + step_error) and np.all(
-                np.abs(elapsed - ticks * candidate) <= tolerance + grid_error
-            ):
-                return candidate
-    raise _error(source, "time_frame", "must be uniform and spaced by bin_width")
+    try:
+        return _validated_native_width(timestamps, width)
+    except ValueError as exc:
+        raise _error(source, "time_frame", str(exc)) from exc
 
 
 def _unit_count(field: h5py.Dataset, source: Source) -> int:
